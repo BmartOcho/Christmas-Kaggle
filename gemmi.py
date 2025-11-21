@@ -15,17 +15,16 @@ from shapely.affinity import rotate, translate
 MAX_N = 200
 GLOBAL_SEED = 42
 
-# Physics Settings for Prime Numbers
-PHYSICS_ITERS = 500    # How hard to squeeze primes
-PANIC_THRESHOLD = 50   # Teleport trigger
+# Physics Settings
+PHYSICS_ITERS = 600    # Increased for better squeezing
+PANIC_THRESHOLD = 50   
 
 # Safety for overlap checks
-FAST_CHECK_DIST_SQ = 2.2 ** 2 
+FAST_CHECK_DIST_SQ = 2.1 ** 2 
 
 # =========================
 #   EXACT TREE SHAPE
 # =========================
-# Using the high-precision definition from your files
 TREE_POLYGON = Polygon([
     (0.0, 0.8), (0.125, 0.5), (0.0625, 0.5), (0.2, 0.25), (0.1, 0.25),
     (0.35, 0.0), (0.075, 0.0), (0.075, -0.2), (-0.075, -0.2), (-0.075, 0.0),
@@ -53,7 +52,7 @@ def get_score(layout, n) -> float:
     return (side * side) / n
 
 # =========================
-#   PHYSICS ENGINE (For Primes)
+#   PHYSICS ENGINE
 # =========================
 
 def solve_overlaps(layout, polys):
@@ -99,7 +98,7 @@ def teleport_stuck_tree(layout, polys):
         ys = [y for _,y,_ in layout]
         cx, cy = sum(xs)/n, sum(ys)/n
         angle = random.uniform(0, 6.28)
-        radius = math.sqrt(n) * 0.8
+        radius = math.sqrt(n) * 0.7 # Teleport closer
         nx = cx + math.cos(angle) * radius
         ny = cy + math.sin(angle) * radius
         layout[worst_idx] = (nx, ny, random.uniform(0, 360))
@@ -138,7 +137,7 @@ def optimize_layout_physics(layout, iterations=200):
     return best_layout
 
 # =========================
-#   FACTORIZATION ENGINE (The Multiplier)
+#   FACTORIZATION ENGINE
 # =========================
 
 def get_factors(n):
@@ -156,17 +155,17 @@ def generate_tiled_layout(base_layout, rows, cols):
     polys = layout_to_polys(base_layout)
     minx, miny, maxx, maxy = get_bounds(polys)
     
-    # Dimensions of the block we are copying
+    # Dimensions of the block
     block_w = maxx - minx
     block_h = maxy - miny
     
-    # Add tiny buffer to prevent overlap errors
-    spacing_x = block_w * 1.0001
-    spacing_y = block_h * 1.0001
+    # Tighter spacing
+    spacing_x = block_w * 1.0
+    spacing_y = block_h * 1.0
     
     new_layout = []
     
-    # Center offset to keep 0,0 in middle
+    # Center offset
     total_w = spacing_x * cols
     total_h = spacing_y * rows
     start_x = -total_w / 2 + spacing_x / 2
@@ -188,20 +187,19 @@ def generate_tiled_layout(base_layout, rows, cols):
 
 def main():
     random.seed(GLOBAL_SEED)
-    best_layouts = {} # Stores best layout for every N
+    best_layouts = {} 
     total_score = 0.0
     
-    print(f"Starting FACTORIZATION optimization...")
+    print(f"Starting GENERATOR (v5) optimization...")
     start_time = time.time()
 
     for n in range(1, MAX_N + 1):
         
         candidates = []
         
-        # --- 1. PHYSICS CANDIDATE (Squeeze & Shake) ---
-        # Only run heavy physics for smaller numbers or Primes
-        # For large composites, tiling is usually strictly better.
-        if n <= 25 or n in [29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71]: # Heuristic: Primes matter most
+        # --- 1. PHYSICS CANDIDATE ---
+        # Run physics for all small numbers and primes to avoid "long skinny" tiling issues
+        if n <= 65 or n in [67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127]: 
             # Initial spiral
             layout = []
             for k in range(n):
@@ -213,42 +211,44 @@ def main():
             score = get_score(layout, n)
             candidates.append((score, layout, "Physics"))
 
-        # --- 2. TILING CANDIDATES (The Secret Sauce) ---
-        # Try to build N using ALL previous layouts
-        # E.g. For N=12, try 2x6(using N=1), 3x4(using N=1), 
-        #      2x3(using N=2), 2x2(using N=3), 1x2(using N=6)
-        
-        # divisors of N
-        divs = [i for i in range(1, n) if n % i == 0] # Proper divisors
+        # --- 2. TILING CANDIDATES ---
+        divs = [i for i in range(1, n) if n % i == 0]
         
         for d in divs:
-            # We want to build N using blocks of size d
-            # We need (n // d) copies of block 'd'
             num_blocks = n // d
-            grid_options = get_factors(num_blocks) # Ways to arrange the blocks (rows, cols)
+            grid_options = get_factors(num_blocks)
             
-            base_layout = best_layouts[d]
-            
-            for (rows, cols) in grid_options:
-                # Try R x C
-                tiled = generate_tiled_layout(base_layout, rows, cols)
-                s = get_score(tiled, n)
-                candidates.append((s, tiled, f"Tile({d}x{rows}x{cols})"))
+            if d in best_layouts:
+                base_layout = best_layouts[d]
                 
-                # Try C x R (Rotation)
-                if rows != cols:
-                    tiled = generate_tiled_layout(base_layout, cols, rows)
+                for (rows, cols) in grid_options:
+                    tiled = generate_tiled_layout(base_layout, rows, cols)
                     s = get_score(tiled, n)
-                    candidates.append((s, tiled, f"Tile({d}x{cols}x{rows})"))
+                    candidates.append((s, tiled, f"Tile({d}x{rows}x{cols})"))
+                    
+                    if rows != cols:
+                        tiled = generate_tiled_layout(base_layout, cols, rows)
+                        s = get_score(tiled, n)
+                        candidates.append((s, tiled, f"Tile({d}x{cols}x{rows})"))
 
         # --- PICK WINNER ---
         if not candidates:
-            # Fallback if no physics run and no factors (shouldn't happen for N>1)
-            layout = best_layouts[n-1] + [(100,100,0)] # Dummy
-            layout = optimize_layout_physics(layout, 100)
+            # INTELLIGENT FALLBACK (Fixes the 2523 score bug)
+            prev_layout = best_layouts[n-1]
+            xs = [x for x,_,_ in prev_layout]
+            ys = [y for _,y,_ in prev_layout]
+            cx, cy = sum(xs)/(n-1), sum(ys)/(n-1)
+            
+            angle = random.uniform(0, 6.28)
+            dist = math.sqrt(n) * 0.6
+            nx = cx + math.cos(angle) * dist
+            ny = cy + math.sin(angle) * dist
+            
+            layout = prev_layout + [(nx, ny, random.uniform(0, 360))]
+            layout = optimize_layout_physics(layout, iterations=400)
             candidates.append((get_score(layout, n), layout, "Fallback"))
 
-        candidates.sort(key=lambda x: x[0]) # Lowest score first
+        candidates.sort(key=lambda x: x[0]) 
         best_score, best_lay, source = candidates[0]
         
         # Center Result
@@ -260,14 +260,13 @@ def main():
         best_layouts[n] = best_lay
         total_score += best_score
         
-        if n % 5 == 0 or n < 20:
+        if n % 10 == 0 or n < 10:
             print(f"N={n:03d} | Score={best_score:.4f} | Method={source}")
 
-    print(f"\nOptimization Complete.")
-    print(f"Est Total Score: {total_score:.4f}")
+    print(f"\nGenerator Complete. Est Score: {total_score:.4f}")
 
     # Write CSV
-    with open("submission_factorized.csv", "w", newline="") as f:
+    with open("submission_gemmi.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["id", "x", "y", "deg"])
         for n in range(1, MAX_N + 1):
@@ -275,7 +274,7 @@ def main():
             for i, (x, y, deg) in enumerate(layout):
                 w.writerow([f"{n:03d}_{i}", f"s{x}", f"s{y}", f"s{deg}"])
     
-    print("submission_factorized.csv written.")
+    print("submission_gemmi.csv written.")
 
 if __name__ == "__main__":
     main()
